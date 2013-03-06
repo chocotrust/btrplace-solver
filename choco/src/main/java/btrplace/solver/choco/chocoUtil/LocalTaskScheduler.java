@@ -183,23 +183,57 @@ public class LocalTaskScheduler {
 
     public void computeProfiles() {
 
-        for (int i = 0; i < nbDims; i++) {
-            //What is necessarily used on the resource
-            profilesMin[i].clear();
-
-            //Maximum possible usage on the resource
-            profilesMax[i].clear();
-
-            profilesMax[i].put(0, capacities[i][me] - startupFree[i]);
-            profilesMin[i].put(0, capacities[i][me] - startupFree[i]);
-        }
-
         int lastInf = out.isEmpty() ? 0 : Integer.MAX_VALUE;
         int lastSup = 0;
+
+        TIntArrayList idxToMoment = new TIntArrayList();
+        TIntIntHashMap momentToIdx = new TIntIntHashMap();
+
+        momentToIdx.put(0, 0);
+        idxToMoment.add(0);
+        int idx = 1;
+        for (int j = out.nextSetBit(0); j >= 0; j = out.nextSetBit(j + 1)) {
+            int t = cEnds[j].getInf();
+            if (!momentToIdx.containsKey(t)) {
+                momentToIdx.put(t, idx++);
+                idxToMoment.add(t);
+            }
+
+            t = cEnds[j].getSup();
+            if (!momentToIdx.containsKey(t)) {
+                momentToIdx.put(t, idx++);
+                idxToMoment.add(t);
+            }
+        }
+
+        for (int x = 0; x < vIn.size(); x++) {
+            int j = vIn.get(x);
+            int t = dStarts[j].getSup();
+            if (!momentToIdx.containsKey(t)) {
+                momentToIdx.put(t, idx++);
+                idxToMoment.add(t);
+            }
+            t = dStarts[j].getInf();
+            if (!momentToIdx.containsKey(t)) {
+                momentToIdx.put(t, idx++);
+                idxToMoment.add(t);
+            }
+        }
+
+        int [][] max = new int[nbDims][];
+        int [][] min = new int[nbDims][];
+        for (int i = 0; i < nbDims; i++) {
+            max[i] = new int[idxToMoment.size()];
+            min[i] = new int[idxToMoment.size()];
+            min[i][0] = capacities[i][me] - startupFree[i];
+            max[i][0] = capacities[i][me] - startupFree[i];
+
+        }
 
         for (int j = out.nextSetBit(0); j >= 0; j = out.nextSetBit(j + 1)) {
 
             int t = cEnds[j].getInf();
+            int tIdx = momentToIdx.get(t);
             if (t < lastInf) {
                 lastInf = t;
             }
@@ -209,7 +243,8 @@ public class LocalTaskScheduler {
                     ChocoLogging.getBranchingLogger().finest(me + " " + cEnds[j].pretty() + " increasing");
                 }
                 for (int i = 0; i < nbDims; i++) {
-                    profilesMax[i].put(t, profilesMax[i].get(t) - cUsages[i][j]);
+                    max[i][tIdx] -= cUsages[i][j];
+                    //profilesMax[i].put(t, profilesMax[i].get(t) - cUsages[i][j]);
                 }
 
             } else {
@@ -217,22 +252,26 @@ public class LocalTaskScheduler {
                     ChocoLogging.getBranchingLogger().finest(me + " " + cEnds[j].pretty() + " < or non-associated (" + (revAssociations[j] >= 0 ? dStarts[revAssociations[j]].pretty() : "no rev") + "?)");
                 }
                 for (int i = 0; i < nbDims; i++) {
-                    profilesMin[i].put(t, profilesMin[i].get(t) - cUsages[i][j]);
+                    min[i][tIdx] -= cUsages[i][j];
+                    //profilesMin[i].put(t, profilesMin[i].get(t) - cUsages[i][j]);
                 }
 
             }
 
             t = cEnds[j].getSup();
+            tIdx = momentToIdx.get(t);
             if (t > lastSup) {
                 lastSup = t;
             }
             if (associatedToDSliceOnCurrentNode(j) && increase(j, revAssociations[j])) {
                 for (int i = 0; i < nbDims; i++) {
-                    profilesMin[i].put(t, profilesMin[i].get(t) - cUsages[i][j]);
+                    //profilesMin[i].put(t, profilesMin[i].get(t) - cUsages[i][j]);
+                   min[i][tIdx] -= cUsages[i][j];
                 }
             } else {
                 for (int i = 0; i < nbDims; i++) {
-                    profilesMax[i].put(t, profilesMax[i].get(t) - cUsages[i][j]);
+                    //profilesMax[i].put(t, profilesMax[i].get(t) - cUsages[i][j]);
+                    max[i][tIdx] -= cUsages[i][j];
                 }
             }
         }
@@ -248,11 +287,30 @@ public class LocalTaskScheduler {
             for (int x = 0; x < vIn.size(); x++) {
                 int j = vIn.get(x);
                 int t = dStarts[j].getSup();
-                profilesMin[i].put(t, profilesMin[i].get(t) + dUsages[i][j]);
+                int tIdx = momentToIdx.get(t);
+                //profilesMin[i].put(t, profilesMin[i].get(t) + dUsages[i][j]);
+                min[i][tIdx] += dUsages[i][j];
                 t = dStarts[j].getInf();
-                profilesMax[i].put(t, profilesMax[i].get(t) + dUsages[i][j]);
+                tIdx = momentToIdx.get(t);
+                //profilesMax[i].put(t, profilesMax[i].get(t) + dUsages[i][j]);
+                max[i][tIdx] += dUsages[i][j];
             }
         }
+
+        for (int i = 0; i < nbDims; i++) {
+            //What is necessarily used on the resource
+            profilesMin[i].clear();
+
+            //Maximum possible usage on the resource
+            profilesMax[i].clear();
+
+            for (int tIdx = 0; tIdx < idxToMoment.size(); tIdx++) {
+                int t = idxToMoment.get(tIdx);
+                profilesMin[i].put(t, min[i][tIdx]);
+                profilesMax[i].put(t, max[i][tIdx]);
+            }
+        }
+
         //Now transforms into an absolute profile
         sortedMinProfile = null;
         sortedMinProfile = profilesMin[0].keys();
